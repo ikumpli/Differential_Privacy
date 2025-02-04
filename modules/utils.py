@@ -332,12 +332,25 @@ def plot_f1_score_comparison(private_metrics_df, non_private_metrics, img_path=N
     and plots a bar chart for DP results with error bars.
     Adds a dashed red horizontal line for non-private F1 baseline.
     """
+
     # Define bins
     epsilon_bins = np.logspace(-2, 4, 10)
     
-    # Create range labels using fixed-point formatting (avoid scientific notation)
+    # Create range labels with proper formatting
+    def format_label(value):
+        """
+        Formats a value to avoid scientific notation and ensures 
+        the label has at most 4 characters (e.g., 0.0464 -> 0.05).
+        """
+        if value >= 10:
+            return f"{int(round(value))}"  # Round and convert to integer
+        elif value >= 1:
+            return f"{round(value, 1)}"  # Round to 1 decimal place
+        else:
+            return f"{round(value, 2):.2f}"  # Round to 2 decimals, enforce 2 decimals
+
     range_labels = [
-        f"{epsilon_bins[i]:.2f} - {epsilon_bins[i + 1]:.2f}"
+        f"{format_label(epsilon_bins[i])} - {format_label(epsilon_bins[i + 1])}"
         for i in range(len(epsilon_bins) - 1)
     ]
 
@@ -351,7 +364,7 @@ def plot_f1_score_comparison(private_metrics_df, non_private_metrics, img_path=N
         f1_avg.append(avg_f1)
         f1_std.append(std_f1)
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(5, 4))
     bar_width = 0.6
     x = np.arange(len(range_labels))
 
@@ -373,11 +386,11 @@ def plot_f1_score_comparison(private_metrics_df, non_private_metrics, img_path=N
     plt.xlabel("Epsilon Ranges (Log Scale)", fontsize=10)
     plt.ylabel("F1 Score", fontsize=10)
     plt.ylim(0.0, 1.0)
-    plt.title("F1 Score Comparison: Non-Private vs Differentially Private Models", fontsize=12)
-    plt.xticks(x, range_labels, rotation=45)
+    plt.title("Non-Private vs DP Logistic Regression", fontsize=14, y=1.08)
+    plt.xticks(x, range_labels, rotation=45, fontsize=8)
     plt.legend(prop={'size': 8})
     plt.grid(axis="y", linestyle="--", alpha=0.7)
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
     if img_path is None:
         plt.savefig('f1_comparison.png', dpi=300)
     else:
