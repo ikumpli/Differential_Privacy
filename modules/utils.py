@@ -1,20 +1,8 @@
 import pandas as pd
 import numpy as np
-
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
-from diffprivlib.models import (LogisticRegression, GaussianNB,
-                                RandomForestClassifier, DecisionTreeClassifier)
-from sklearn.linear_model import LogisticRegression as SklearnLogisticRegression
-from sklearn.naive_bayes import GaussianNB as SklearnGaussianNB
-from sklearn.ensemble import RandomForestClassifier as SklearnRandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier as SklearnDecisionTreeClassifier
-from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score)
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-import ipywidgets as widgets
-from IPython.display import display
+from diffprivlib.tools import mean, histogram
+from matplotlib.lines import Line2D
 
 COLOR_PALETTE = ['blue', 'green', 'purple', 'orange', 'cyan', 'magenta']
 
@@ -49,339 +37,349 @@ def load_and_preprocess_titanic():
     y = df[target]
     return X, y
 
-class DifferentialPrivacyBenchmark:
-    def __init__(self, X, y, epsilon_values):
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
+def calculate_private_statistics(df, epsilon_values):
+    """
+    Calculate private statistics for Age, Survival Rate, and Class Distributions
+    for a given set of epsilon values.
+    """
+    age_bounds = (0, 80)
+    survived_bounds = (0, 1)
+    class_range = (1, 3)
+
+    private_mean_ages = []
+    private_survival_rates = []
+    private_class_distributions = []
+
+    for epsilon in epsilon_values:
+        # Calculate private mean age
+        private_mean_ages.append(mean(df['Age'].dropna(), epsilon=epsilon, bounds=age_bounds))
+        # Calculate private survival rate
+        private_survival_rates.append(mean(df['Survived'], epsilon=epsilon, bounds=survived_bounds))
+        # Calculate private class distribution
+        private_class_counts, _ = histogram(df['Pclass'], epsilon=epsilon, range=class_range, bins=3)
+        private_class_distributions.append(private_class_counts / private_class_counts.sum())
+
+    return private_mean_ages, private_survival_rates, private_class_distributions
+
+def plot_private_statistics(epsilon_values, original_stats, private_stats):
+    """
+    Plot comparison of original vs private stats (Age, Survival Rate, Class).
+    With consistent styling for figure/axes.
+    """
+    original_mean_age, original_survival_rate, original_class_counts = original_stats
+    private_mean_ages, private_survival_rates, private_class_distributions = private_stats
+
+    # We'll choose a width that comfortably fits 3 subplots in 1 row
+    plt.figure(figsize=(12, 4.5))
+
+    # --- Mean Age ---
+    plt.subplot(1, 3, 1)
+    plt.plot(epsilon_values, private_mean_ages, marker='o', label="Private Mean Age")
+    plt.axhline(original_mean_age, color='red', linestyle='--', label="Original Mean Age")
+    plt.title("Mean Age vs Epsilon", fontsize=12)
+    plt.xlabel("Epsilon", fontsize=10)
+    plt.ylabel("Mean Age", fontsize=10)
+    plt.grid(True)
+    plt.legend()
+
+    # --- Survival Rate ---
+    plt.subplot(1, 3, 2)
+    plt.plot(epsilon_values, private_survival_rates, marker='o', label="Private Survival Rate")
+    plt.axhline(original_survival_rate, color='red', linestyle='--', label="Original Survival Rate")
+    plt.title("Survival Rate vs Epsilon", fontsize=12)
+    plt.xlabel("Epsilon", fontsize=10)
+    plt.ylabel("Survival Rate", fontsize=10)
+    plt.grid(True)
+    plt.legend()
+
+    # --- Class Distribution ---
+    plt.subplot(1, 3, 3)
+    for i in range(3):  # e.g., classes 1, 2, 3
+        plt.plot(
+            epsilon_values, 
+            [dist[i] for dist in private_class_distributions], 
+            marker='o',
+            label=f"Class {i+1}"
         )
-        self.epsilon_values = epsilon_values
-        self.data_norm = 0
-        self.results = []
+    # Original lines
+    plt.axhline(original_class_counts[1], color='red', linestyle='--',
+                label="Original Class 1", alpha=0.5)
+    plt.axhline(original_class_counts[2], color='green', linestyle='--',
+                label="Original Class 2", alpha=0.5)
+    plt.axhline(original_class_counts[3], color='blue', linestyle='--',
+                label="Original Class 3", alpha=0.5)
+    plt.title("Class Distribution vs Epsilon", fontsize=12)
+    plt.xlabel("Epsilon", fontsize=10)
+    plt.ylabel("Normalized Class Proportion", fontsize=10)
+    plt.grid(True)
+    plt.legend()
 
-    def scale_data(self):
-        scaler = StandardScaler()
-        self.X_train = scaler.fit_transform(self.X_train)
-        self.X_test = scaler.transform(self.X_test)
-        self.data_norm = np.linalg.norm(self.X_train, axis=1).max()
-        
-        self.bounds_X = (float(np.min(self.X_train)), float(np.max(self.X_train)))
-        self.bounds_y = (float(np.min(self.y_train)), float(np.max(self.y_train)))
+    plt.suptitle("Private Statistics Comparison", fontsize=14, y=1.02)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.show()
 
-    def benchmark_private_model(self, model_name, model_class):
-        for epsilon in self.epsilon_values:
-            if model_class == LogisticRegression:
-                model = LogisticRegression(epsilon=epsilon, data_norm=self.data_norm)
-            elif model_class == GaussianNB:
-                model = GaussianNB(epsilon=epsilon, bounds=(0,1))
-            elif model_class == RandomForestClassifier:
-                model = RandomForestClassifier(epsilon=epsilon, classes=[0, 1], bounds=(0,1))
-            elif model_class == DecisionTreeClassifier:
-                model = DecisionTreeClassifier(epsilon=epsilon, classes=[0, 1], bounds=(0,1))
+def plot_dp_metrics(private_metrics_df, non_private_metrics, img_path=None, color_palette=COLOR_PALETTE):
+    """
+    Plots Accuracy, Precision, Recall, and F1 vs Epsilon (log scale)
+    with a single consolidated legend and consistent styling.
+    """
+    fig, axs = plt.subplots(2, 2, figsize=(10, 6))
 
-            model.fit(self.X_train, self.y_train)
-            predictions = model.predict(self.X_test)
+    # Unpack baseline
+    baseline_acc = non_private_metrics['accuracy']
+    baseline_prec = non_private_metrics['precision']
+    baseline_recall = non_private_metrics['recall']
+    baseline_f1 = non_private_metrics['f1']
 
-            metrics = self._compute_metrics(predictions, model_name, epsilon)
-            self.results.append(metrics)
+    # Accuracy
+    axs[0, 0].plot(
+        private_metrics_df['epsilon'],
+        private_metrics_df['accuracy'],
+        marker='o',
+        markersize=3.5,
+        linewidth=1.3,
+        color=color_palette[0]
+    )
+    axs[0, 0].axhline(
+        y=baseline_acc, 
+        color='red',
+        linestyle='--',
+        linewidth=1.3
+    )
+    axs[0, 0].set_title("Accuracy", fontsize=12)
+    axs[0, 0].set_xlabel("Epsilon", fontsize=10)
+    axs[0, 0].set_ylabel("Metric Value", fontsize=10)
+    axs[0, 0].set_ylim(0.0, 1.0)
+    axs[0, 0].set_xscale("log")
+    axs[0, 0].grid()
 
-    def benchmark_non_private_model(self, model_name, model_class):
-        if model_class == SklearnLogisticRegression:
-            model = SklearnLogisticRegression()
-        elif model_class == SklearnGaussianNB:
-            model = SklearnGaussianNB()
-        elif model_class == SklearnRandomForestClassifier:
-            model = SklearnRandomForestClassifier()
-        elif model_class == SklearnDecisionTreeClassifier:
-            model = SklearnDecisionTreeClassifier()
-        model.fit(self.X_train, self.y_train)
-        predictions = model.predict(self.X_test)
-        metrics = self._compute_metrics(predictions, model_name, 'Non-Private')
-        self.results.append(metrics)
+    # Precision
+    axs[0, 1].plot(
+        private_metrics_df['epsilon'],
+        private_metrics_df['precision'],
+        marker='o',
+        markersize=3.5,
+        linewidth=1.3,
+        color=color_palette[1]
+    )
+    axs[0, 1].axhline(
+        y=baseline_prec,
+        color='red',
+        linestyle='--',
+        linewidth=1.3
+    )
+    axs[0, 1].set_title("Precision", fontsize=12)
+    axs[0, 1].set_xlabel("Epsilon", fontsize=10)
+    axs[0, 1].set_ylabel("Metric Value", fontsize=10)
+    axs[0, 1].set_ylim(0.0, 1.0)
+    axs[0, 1].set_xscale("log")
+    axs[0, 1].grid()
 
-    def _compute_metrics(self, predictions, model_name, epsilon):
-        return {
-            'Model': model_name,
-            'Epsilon': epsilon,
-            'Accuracy': accuracy_score(self.y_test, predictions),
-            'Precision': precision_score(self.y_test, predictions, zero_division=0),
-            'Recall': recall_score(self.y_test, predictions),
-            'F1': f1_score(self.y_test, predictions)
-        }
-        
-    def get_results_dataframe(self):
-        return pd.DataFrame(self.results)
+    # Recall
+    axs[1, 0].plot(
+        private_metrics_df['epsilon'],
+        private_metrics_df['recall'],
+        marker='o',
+        markersize=3.5,
+        linewidth=1.3,
+        color=color_palette[2]
+    )
+    axs[1, 0].axhline(
+        y=baseline_recall,
+        color='red',
+        linestyle='--',
+        linewidth=1.3
+    )
+    axs[1, 0].set_title("Recall", fontsize=12)
+    axs[1, 0].set_xlabel("Epsilon", fontsize=10)
+    axs[1, 0].set_ylabel("Metric Value", fontsize=10)
+    axs[1, 0].set_ylim(0.0, 1.0)
+    axs[1, 0].set_xscale("log")
+    axs[1, 0].grid()
 
-    def plot_metrics(self, save_img_path=None):
-        df = self.get_results_dataframe()
+    # F1 Score
+    axs[1, 1].plot(
+        private_metrics_df['epsilon'],
+        private_metrics_df['f1'],
+        marker='o',
+        markersize=3.5,
+        linewidth=1.3,
+        color=color_palette[3]
+    )
+    axs[1, 1].axhline(
+        y=baseline_f1,
+        color='red',
+        linestyle='--',
+        linewidth=1.3
+    )
+    axs[1, 1].set_title("F1 Score", fontsize=12)
+    axs[1, 1].set_xlabel("Epsilon", fontsize=10)
+    axs[1, 1].set_ylabel("Metric Value", fontsize=10)
+    axs[1, 1].set_ylim(0.0, 1.0)
+    axs[1, 1].set_xscale("log")
+    axs[1, 1].grid()
 
-        # Select metrics
-        metrics = ['Accuracy', 'Precision', 'Recall', 'F1']
-        
-        # Separate private and non-private results
-        private_df = df[df['Epsilon'] != 'Non-Private']
-        non_private_df = df[df['Epsilon'] == 'Non-Private']
+    # Consolidated legend handles
+    legend_handles = [
+        Line2D([0], [0], color='red', linestyle='--', label='Non-Private Baseline'),
+        Line2D([0], [0], color=color_palette[0], marker='o', linestyle='-', label='DP Accuracy'),
+        Line2D([0], [0], color=color_palette[1], marker='o', linestyle='-', label='DP Precision'),
+        Line2D([0], [0], color=color_palette[2], marker='o', linestyle='-', label='DP Recall'),
+        Line2D([0], [0], color=color_palette[3], marker='o', linestyle='-', label='DP F1 Score')
+    ]
 
-        models = df['Model'].unique()
-        colors = COLOR_PALETTE
+    fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 0.92),
+        frameon=False,
+        prop={'size': 8}
+    )
 
-        num_metrics = len(metrics)
-        cols = 2
-        rows = (num_metrics + 1) // cols
+    plt.suptitle("Differentially Private Logistic Regression Metrics", fontsize=14, y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    if img_path==None:
+        plt.savefig('dp_metrics.png', dpi=300)
+    else:
+        plt.savefig(img_path, dpi=300)
+    plt.show()
 
-        fig, axs = plt.subplots(rows, cols, figsize=(10, 6))
-        axs = axs.flatten()  # Flatten subplots
+def plot_dp_metrics_acc_f1(private_metrics_df, non_private_metrics, img_path=None, color_palette=COLOR_PALETTE):
+    """
+    Plots only Accuracy and F1 Score vs Epsilon (log scale) in a 2-row, 1-column layout.
+    Displays a consolidated legend at the top with the DP curves and the non-private baseline.
+    """
+    # Create 2 rows x 1 column layout
+    fig, axs = plt.subplots(2, 1, figsize=(5, 6))
+    
+    # Unpack baseline values
+    baseline_acc = non_private_metrics['accuracy']
+    baseline_f1  = non_private_metrics['f1']
+    
+    # --- Accuracy subplot ---
+    axs[0].plot(
+        private_metrics_df['epsilon'],
+        private_metrics_df['accuracy'],
+        marker='o',
+        markersize=3.5,
+        linewidth=1.3,
+        color=color_palette[0]
+    )
+    axs[0].axhline(
+        y=baseline_acc,
+        color='red',
+        linestyle='--',
+        linewidth=1.3
+    )
+    axs[0].set_title("Accuracy", fontsize=12)
+    axs[0].set_xlabel("Epsilon", fontsize=10)
+    axs[0].set_ylabel("Metric Value", fontsize=10)
+    axs[0].set_ylim(0.0, 1.0)
+    axs[0].set_xscale("log")
+    axs[0].grid()
 
-        # Store legend handles
-        legend_handles = []
+    # --- F1 Score subplot ---
+    axs[1].plot(
+        private_metrics_df['epsilon'],
+        private_metrics_df['f1'],
+        marker='o',
+        markersize=3.5,
+        linewidth=1.3,
+        color=color_palette[3]
+    )
+    axs[1].axhline(
+        y=baseline_f1,
+        color='red',
+        linestyle='--',
+        linewidth=1.3
+    )
+    axs[1].set_title("F1 Score", fontsize=12)
+    axs[1].set_xlabel("Epsilon", fontsize=10)
+    axs[1].set_ylabel("Metric Value", fontsize=10)
+    axs[1].set_ylim(0.0, 1.0)
+    axs[1].set_xscale("log")
+    axs[1].grid()
+    
+    # Consolidated legend handles
+    legend_handles = [
+        Line2D([0], [0], color='red', linestyle='--', label='Non-Private Baseline'),
+        Line2D([0], [0], color=color_palette[0], marker='o', linestyle='-', label='DP Accuracy'),
+        Line2D([0], [0], color=color_palette[3], marker='o', linestyle='-', label='DP F1 Score')
+    ]
+    
+    fig.legend(
+        handles=legend_handles,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 0.92),
+        frameon=False,
+        prop={'size': 8}
+    )
+    
+    plt.suptitle("Differentially Private Logistic Regression Metrics", fontsize=14, y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    
+    if img_path is None:
+        plt.savefig('dp_metrics_acc_f1.png', dpi=300)
+    else:
+        plt.savefig(img_path, dpi=300)
+    plt.show()
 
-        for i, metric in enumerate(metrics):
-            ax = axs[i]
-            for j, model in enumerate(models):
-                model_private_df = private_df[private_df['Model'] == model]
-                color = colors[j % len(colors)]
+def plot_f1_score_comparison(private_metrics_df, non_private_metrics, img_path=None, color_palette=COLOR_PALETTE):
+    """
+    Creates bins of epsilon (log-spaced), computes average & std of F1,
+    and plots a bar chart for DP results with error bars.
+    Adds a dashed red horizontal line for non-private F1 baseline.
+    """
+    # Define bins
+    epsilon_bins = np.logspace(-2, 4, 10)
+    
+    # Create range labels using fixed-point formatting (avoid scientific notation)
+    range_labels = [
+        f"{epsilon_bins[i]:.2f} - {epsilon_bins[i + 1]:.2f}"
+        for i in range(len(epsilon_bins) - 1)
+    ]
 
-                # Plot private results (solid line)
-                line_private, = ax.plot(
-                    model_private_df['Epsilon'],
-                    model_private_df[metric],
-                    marker='o',
-                    markersize=3.5,
-                    linewidth=1.3,
-                    label=f"{model} (Private)",
-                    color=color
-                )
-                if f"{model} (Private)" not in [h.get_label() for h in legend_handles]:
-                    legend_handles.append(line_private)
+    f1_avg, f1_std = [], []
 
-                # Plot non-private baseline as dashed line
-                model_nonprivate_df = non_private_df[non_private_df['Model'] == model]
-                if not model_nonprivate_df.empty:
-                    non_private_value = model_nonprivate_df[metric].values[0]
-                    line_non_private = ax.axhline(
-                        y=non_private_value,
-                        color=color,
-                        linestyle='--',
-                        linewidth=1.3,
-                        label=f"{model} (Non-Private)"
-                    )
-                    if f"{model} (Non-Private)" not in [h.get_label() for h in legend_handles]:
-                        legend_handles.append(line_non_private)
+    for i in range(len(epsilon_bins) - 1):
+        mask = ((private_metrics_df['epsilon'] >= epsilon_bins[i]) &
+                (private_metrics_df['epsilon'] < epsilon_bins[i + 1]))
+        avg_f1 = private_metrics_df.loc[mask, 'f1'].mean()
+        std_f1 = private_metrics_df.loc[mask, 'f1'].std()
+        f1_avg.append(avg_f1)
+        f1_std.append(std_f1)
 
-            ax.set_xscale('log')
-            ax.set_xlabel("Epsilon")
-            ax.set_ylabel(metric)
-            ax.set_ylim(0, 1)
-            ax.set_title(f"{metric} vs Epsilon", fontsize=10)
-            ax.grid()
+    plt.figure(figsize=(10, 6))
+    bar_width = 0.6
+    x = np.arange(len(range_labels))
 
-        # Consolidated legend
-        fig.legend(
-            handles=legend_handles,
-            loc="upper center",
-            ncol=4,
-            bbox_to_anchor=(0.5, 0.9),
-            frameon=False,
-            prop={'size': 8}
-        )
+    plt.bar(
+        x, f1_avg, bar_width, yerr=f1_std,
+        label="DP F1 (Averaged)",
+        color=color_palette[0],
+        capsize=5
+    )
 
-        plt.tight_layout(rect=[0, 0, 1, 0.85])
-        plt.suptitle("Differential Privacy Benchmark Metrics", fontsize=14, y=0.94)
-        if save_img_path==None:
-            plt.savefig("benchmark_metrics.png", dpi=300)
-        else:
-            plt.savefig(save_img_path, dpi=300)
-        plt.show()
+    baseline_f1 = non_private_metrics['f1']
+    plt.axhline(
+        y=baseline_f1,
+        color='red',
+        linestyle='--',
+        label='Non-Private Baseline'
+    )
 
-    def plot_metrics_acc_f1(self, save_img_path=None):
-        df = self.get_results_dataframe()
-
-        # Select metrics for plotting
-        metrics = ['Accuracy', 'F1']
-
-        # Separate private and non-private results
-        private_df = df[df['Epsilon'] != 'Non-Private']
-        non_private_df = df[df['Epsilon'] == 'Non-Private']
-
-        models = df['Model'].unique()
-        colors = COLOR_PALETTE
-
-        # Set up 2 rows and 1 column for the subplots
-        fig, axs = plt.subplots(2, 1, figsize=(8, 10))
-        axs = axs.flatten()  # Flatten subplots
-
-        # Store legend handles
-        legend_handles = []
-
-        for i, metric in enumerate(metrics):
-            ax = axs[i]
-            for j, model in enumerate(models):
-                model_private_df = private_df[private_df['Model'] == model]
-                color = colors[j % len(colors)]
-
-                # Plot private results (solid line)
-                line_private, = ax.plot(
-                    model_private_df['Epsilon'],
-                    model_private_df[metric],
-                    marker='o',
-                    markersize=3.5,
-                    linewidth=1.3,
-                    label=f"{model} (Private)",
-                    color=color
-                )
-                if f"{model} (Private)" not in [h.get_label() for h in legend_handles]:
-                    legend_handles.append(line_private)
-
-                # Plot non-private baseline as dashed line
-                model_nonprivate_df = non_private_df[non_private_df['Model'] == model]
-                if not model_nonprivate_df.empty:
-                    non_private_value = model_nonprivate_df[metric].values[0]
-                    line_non_private = ax.axhline(
-                        y=non_private_value,
-                        color=color,
-                        linestyle='--',
-                        linewidth=1.3,
-                        label=f"{model} (Non-Private)"
-                    )
-                    if f"{model} (Non-Private)" not in [h.get_label() for h in legend_handles]:
-                        legend_handles.append(line_non_private)
-
-            ax.set_xscale('log')
-            ax.set_xlabel("Epsilon", fontsize=10)
-            ax.set_ylabel(metric, fontsize=10)
-            ax.set_ylim(0, 1)
-            ax.set_title(f"{metric} vs Epsilon", fontsize=12)
-            ax.grid()
-
-        # Consolidated legend
-        fig.legend(
-            handles=legend_handles,
-            loc="upper center",
-            ncol=4,
-            bbox_to_anchor=(0.5, 0.95),
-            frameon=False,
-            prop={'size': 7}
-        )
-
-        plt.tight_layout(rect=[0, 0, 1, 0.9])
-        plt.suptitle("Differential Privacy Benchmark Metrics", fontsize=14, y=0.98)
-        if save_img_path is None:
-            plt.savefig("accuracy_f1_metrics.png", dpi=300)
-        else:
-            plt.savefig(save_img_path, dpi=300)
-        plt.show()
-
-
-    def plot_interactive_bar_chart(self):
-        """
-        Creates an interactive bar chart with the ability to toggle between metrics
-        (e.g., F1 Score, Accuracy) and adjust epsilon using a slider.
-        The slider now uses discrete indices corresponding to the predefined epsilon values,
-        and the dropdown allows selecting the metric.
-        """
-        df = self.get_results_dataframe()
-
-        # Separate private and non-private rows
-        df_private = df[df['Epsilon'] != 'Non-Private']
-        df_nonprivate = df[df['Epsilon'] == 'Non-Private']
-
-        # Get the private epsilon values (assumed to be numerical)
-        private_epsilons = np.array(sorted(df_private['Epsilon'].unique()))
-        models = df_private['Model'].unique()
-
-        # Available metrics for selection
-        metrics = ['F1', 'Accuracy', 'Precision', 'Recall']
-
-        # Initial settings
-        initial_metric = metrics[0]
-        initial_index = 0
-        initial_epsilon = private_epsilons[initial_index]
-        filtered_df = df_private[df_private['Epsilon'] == initial_epsilon]
-
-        # Create the plot
-        fig, ax = plt.subplots(figsize=(10, 6))
-        plt.subplots_adjust(bottom=0.25)  # Adjust to fit the slider
-
-        # Create bars for each model
-        bars = ax.bar(models, filtered_df[initial_metric], color='blue')
-        ax.set_ylim(0, 1)
-        ax.set_title(f"{initial_metric} Comparison (Epsilon={initial_epsilon:.2f})")
-        ax.set_xlabel("Models")
-        ax.set_ylabel(initial_metric)
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
-
-        # Store references to baseline lines
-        baseline_lines = []
-
-        # Function to add baseline lines
-        def add_baseline_lines(current_metric):
-            # Remove existing lines
-            for line in baseline_lines:
-                line.remove()
-            baseline_lines.clear()
-
-            # Add new baseline lines
-            for i, model_name in enumerate(models):
-                row = df_nonprivate[df_nonprivate['Model'] == model_name]
-                if not row.empty:
-                    baseline_metric = row[current_metric].values[0]
-                    bar_x = bars[i].get_x() + bars[i].get_width() / 2
-                    half_width = bars[i].get_width() / 2
-                    line = ax.hlines(
-                        y=baseline_metric,
-                        xmin=bar_x - half_width * 0.5,
-                        xmax=bar_x + half_width * 0.5,
-                        colors='red',
-                        linestyles='dotted',
-                        label=("Non-Private Baseline" if i == 0 else None)
-                    )
-                    baseline_lines.append(line)
-            ax.legend()
-
-        # Add initial baseline lines
-        add_baseline_lines(initial_metric)
-
-        # Create the slider using ipywidgets
-        slider = widgets.IntSlider(
-            value=initial_index,
-            min=0,
-            max=len(private_epsilons) - 1,
-            step=1,
-            description="Epsilon",
-            style={"description_width": "initial"},
-        )
-
-        # Create the dropdown using ipywidgets
-        dropdown = widgets.Dropdown(
-            options=metrics,
-            value=initial_metric,
-            description="Metric",
-            style={"description_width": "initial"},
-        )
-
-        # Update function for the slider and dropdown
-        def update_plot(change):
-            current_index = slider.value
-            current_epsilon = private_epsilons[current_index]
-            current_metric = dropdown.value
-
-            # Filter data for the selected epsilon
-            filtered = df_private[df_private['Epsilon'] == current_epsilon]
-            for bar_rect, new_value in zip(bars, filtered[current_metric]):
-                bar_rect.set_height(new_value)
-
-            # Update title and baseline lines
-            ax.set_title(f"{current_metric} Comparison (Epsilon={current_epsilon:.2f})")
-            ax.set_ylabel(current_metric)
-            ax.set_ylim(0, 1)
-
-            # Re-add baseline lines for the selected metric
-            add_baseline_lines(current_metric)
-            fig.canvas.draw_idle()
-
-        # Connect the widgets to the update function
-        slider.observe(update_plot, names='value')
-        dropdown.observe(update_plot, names='value')
-
-        # Display the widgets below the plot
-        display(slider, dropdown)
-        plt.show()
+    plt.xlabel("Epsilon Ranges (Log Scale)", fontsize=10)
+    plt.ylabel("F1 Score", fontsize=10)
+    plt.ylim(0.0, 1.0)
+    plt.title("F1 Score Comparison: Non-Private vs Differentially Private Models", fontsize=12)
+    plt.xticks(x, range_labels, rotation=45)
+    plt.legend(prop={'size': 8})
+    plt.grid(axis="y", linestyle="--", alpha=0.7)
+    plt.tight_layout()
+    if img_path is None:
+        plt.savefig('f1_comparison.png', dpi=300)
+    else:
+        plt.savefig(img_path, dpi=300)
+    plt.show()
