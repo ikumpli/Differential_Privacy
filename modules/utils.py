@@ -16,6 +16,7 @@ from sklearn.preprocessing import StandardScaler
 import ipywidgets as widgets
 from IPython.display import display
 
+COLOR_PALETTE = ['blue', 'green', 'purple', 'orange', 'cyan', 'magenta']
 
 def load_and_preprocess_titanic():
     """
@@ -121,7 +122,7 @@ class DifferentialPrivacyBenchmark:
         non_private_df = df[df['Epsilon'] == 'Non-Private']
 
         models = df['Model'].unique()
-        colors = ['blue', 'orange', 'green', 'red']
+        colors = COLOR_PALETTE
 
         num_metrics = len(metrics)
         cols = 2
@@ -144,6 +145,8 @@ class DifferentialPrivacyBenchmark:
                     model_private_df['Epsilon'],
                     model_private_df[metric],
                     marker='o',
+                    markersize=3.5,
+                    linewidth=1.3,
                     label=f"{model} (Private)",
                     color=color
                 )
@@ -158,6 +161,7 @@ class DifferentialPrivacyBenchmark:
                         y=non_private_value,
                         color=color,
                         linestyle='--',
+                        linewidth=1.3,
                         label=f"{model} (Non-Private)"
                     )
                     if f"{model} (Non-Private)" not in [h.get_label() for h in legend_handles]:
@@ -166,7 +170,8 @@ class DifferentialPrivacyBenchmark:
             ax.set_xscale('log')
             ax.set_xlabel("Epsilon")
             ax.set_ylabel(metric)
-            ax.set_title(f"{metric} vs Epsilon")
+            ax.set_ylim(0, 1)
+            ax.set_title(f"{metric} vs Epsilon", fontsize=10)
             ax.grid()
 
         # Consolidated legend
@@ -175,16 +180,96 @@ class DifferentialPrivacyBenchmark:
             loc="upper center",
             ncol=4,
             bbox_to_anchor=(0.5, 0.9),
-            frameon=False
+            frameon=False,
+            prop={'size': 8}
         )
 
         plt.tight_layout(rect=[0, 0, 1, 0.85])
-        plt.suptitle("Differential Privacy Benchmark Metrics", fontsize=16, y=0.94)
+        plt.suptitle("Differential Privacy Benchmark Metrics", fontsize=14, y=0.94)
         if save_img_path==None:
             plt.savefig("benchmark_metrics.png", dpi=300)
         else:
             plt.savefig(save_img_path, dpi=300)
         plt.show()
+
+    def plot_metrics_acc_f1(self, save_img_path=None):
+        df = self.get_results_dataframe()
+
+        # Select metrics for plotting
+        metrics = ['Accuracy', 'F1']
+
+        # Separate private and non-private results
+        private_df = df[df['Epsilon'] != 'Non-Private']
+        non_private_df = df[df['Epsilon'] == 'Non-Private']
+
+        models = df['Model'].unique()
+        colors = COLOR_PALETTE
+
+        # Set up 2 rows and 1 column for the subplots
+        fig, axs = plt.subplots(2, 1, figsize=(8, 10))
+        axs = axs.flatten()  # Flatten subplots
+
+        # Store legend handles
+        legend_handles = []
+
+        for i, metric in enumerate(metrics):
+            ax = axs[i]
+            for j, model in enumerate(models):
+                model_private_df = private_df[private_df['Model'] == model]
+                color = colors[j % len(colors)]
+
+                # Plot private results (solid line)
+                line_private, = ax.plot(
+                    model_private_df['Epsilon'],
+                    model_private_df[metric],
+                    marker='o',
+                    markersize=3.5,
+                    linewidth=1.3,
+                    label=f"{model} (Private)",
+                    color=color
+                )
+                if f"{model} (Private)" not in [h.get_label() for h in legend_handles]:
+                    legend_handles.append(line_private)
+
+                # Plot non-private baseline as dashed line
+                model_nonprivate_df = non_private_df[non_private_df['Model'] == model]
+                if not model_nonprivate_df.empty:
+                    non_private_value = model_nonprivate_df[metric].values[0]
+                    line_non_private = ax.axhline(
+                        y=non_private_value,
+                        color=color,
+                        linestyle='--',
+                        linewidth=1.3,
+                        label=f"{model} (Non-Private)"
+                    )
+                    if f"{model} (Non-Private)" not in [h.get_label() for h in legend_handles]:
+                        legend_handles.append(line_non_private)
+
+            ax.set_xscale('log')
+            ax.set_xlabel("Epsilon", fontsize=10)
+            ax.set_ylabel(metric, fontsize=10)
+            ax.set_ylim(0, 1)
+            ax.set_title(f"{metric} vs Epsilon", fontsize=12)
+            ax.grid()
+
+        # Consolidated legend
+        fig.legend(
+            handles=legend_handles,
+            loc="upper center",
+            ncol=4,
+            bbox_to_anchor=(0.5, 0.95),
+            frameon=False,
+            prop={'size': 7}
+        )
+
+        plt.tight_layout(rect=[0, 0, 1, 0.9])
+        plt.suptitle("Differential Privacy Benchmark Metrics", fontsize=14, y=0.98)
+        if save_img_path is None:
+            plt.savefig("accuracy_f1_metrics.png", dpi=300)
+        else:
+            plt.savefig(save_img_path, dpi=300)
+        plt.show()
+
 
     def plot_interactive_bar_chart(self):
         """
